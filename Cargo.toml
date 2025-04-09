@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = ["cosnarks-zksaas-blueprint-lib", "cosnarks-zksaas-blueprint-bin"]
+
+[workspace.package]
+version = "0.1.0"
+description = "A Tangle Blueprint for collaborative zkSNARK proofs"
+edition = "2024"
+authors = ["Drew Stone <drewstone329@gmail.com>"]
+license = "MIT OR Apache-2.0"
+homepage = "https://tangle.tools"
+repository = "https://github.com/tangle-network/cosnarks-zksaas-blueprint"
+readme = "README.md"
+categories = ["cryptography", "cryptography::cryptocurrencies"]
+keywords = ["tangle", "blueprint", "avs"]
+
+[workspace.dependencies]
+cosnarks-zksaas-blueprint-lib = { path = "cosnarks-zksaas-blueprint-lib" }
+
+# blueprint-sdk = { git = "https://github.com/tangle-network/blueprint.git" }
+blueprint-sdk = { path = "../gadget/crates/sdk" }
+round-based = { version = "0.4.1" }
+sha2 = { version = "*" }
+libp2p = { version = "0.55.0" }
+
+tokio = { version = "1.43.0" }
+color-eyre = "0.6.3"
+rcgen = "0.12"
+futures = "0.3"
+crossbeam-channel = "0.5.10"
+tempfile = { version = "3.8.0" }
+serde = { version = "1.0.193", features = ["derive", "rc"] }
+serde_json = "1.0"
+serde_yaml = "0.9.27"
+sled = "0.34"
+
+tower = { version = "0.5.2", default-features = false }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing = "0.1.41"
+
+co-circom = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+circom-mpc-vm = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+circom-mpc-compiler = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+circom-types = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-groth16 = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-plonk = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-circom-snarks = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-noir = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-acvm = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-brillig = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-builder = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+co-ultrahonk = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+ultrahonk = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+mpc-core = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+mpc-net = { git = "https://github.com/TaceoLabs/co-snarks", branch = "main" }
+acir = { version = "1.0.0-beta.3", git = "https://github.com/noir-lang/noir/", tag = "v1.0.0-beta.3", package = "acir" }
+acvm = { version = "1.0.0-beta.3", git = "https://github.com/noir-lang/noir/", tag = "v1.0.0-beta.3", package = "acvm" }
+brillig = { version = "1.0.0-beta.3", git = "https://github.com/noir-lang/noir/", tag = "v1.0.0-beta.3", package = "brillig" }
+
+ark-bls12-377 = "^0.5.0"
+ark-bls12-381 = "^0.5.0"
+ark-bn254 = "^0.5.0"
+ark-ec = { version = "^0.5.0", default-features = false }
+ark-groth16 = { version = "=0.5.0" }
+ark-ff = "^0.5.0"
+ark-poly = "^0.5.0"
+ark-relations = "^0.5.0"
+ark-serialize = { version = "^0.5.0", features = ["derive", "std"] }
+ark-std = { version = "^0.5.0", features = ["std"] }
+bincode = "1.3.3"
+
+num-bigint = { version = "0.4.5" }
+num-traits = { version = "0.2.18", default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = 'abort'
