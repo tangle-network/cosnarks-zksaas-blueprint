@@ -91,15 +91,18 @@ impl<K: KeyType> MpcNetworkManager<K> {
             ));
         }
 
-        let local_public_key = self
-            .network_handle
-            .local_participant_id()
-            .public_key::<K>()
-            .ok_or_else(|| Error::Internal("Failed to get local public key".to_string()))?;
+        let local_public_key = match self.network_handle.local_verification_key {
+            Some(key) => key,
+            None => {
+                return Err(Error::ConfigError(
+                    "Local node not found in participant list".to_string(),
+                ));
+            }
+        };
 
         let local_party_index = ordered_participants
             .iter()
-            .position(|pk| pk == &local_public_key)
+            .position(|pk| VerificationIdentifierKey::InstancePublicKey(*pk) == local_public_key)
             .ok_or_else(|| {
                 Error::ConfigError("Local node not found in participant list".to_string())
             })? as PartyIndex;
