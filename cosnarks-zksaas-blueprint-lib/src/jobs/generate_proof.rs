@@ -5,11 +5,12 @@ use crate::error::{Error, Result};
 use crate::types::{CircuitId, ProofResult};
 use blueprint_sdk::crypto::KeyType;
 use blueprint_sdk::extract::Context;
+use blueprint_sdk::std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 use blueprint_sdk::tangle::extract::{CallId, TangleArgs2, TangleResult};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use tracing::{debug, info, warn};
+use blueprint_sdk::{debug, info};
 
 /// Wrapper function that extracts arguments from TangleArgs2 and calls the main implementation
 pub async fn generate_proof_job<K: KeyType + 'static>(
@@ -26,7 +27,7 @@ where
 
 /// Core implementation of the proof generation logic
 pub async fn generate_proof<K: KeyType + 'static>(
-    ctx: Arc<CosnarksContext<K>>,
+    ctx: CosnarksContext<K>,
     call_id: u64,
     circuit_id: CircuitId,
     witness_data_json: String,

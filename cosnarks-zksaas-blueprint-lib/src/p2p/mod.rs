@@ -27,7 +27,6 @@ pub struct CommitMsg {
 /// Round 2: Reveal message containing the actual configuration part
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RevealMsg {
-    // Contains the information needed for NetworkPartyConfig, excluding the ID
     pub dns_name: String,
     pub cert_path: PathBuf,
 }
@@ -37,12 +36,12 @@ pub struct RevealMsg {
 /// Each party commits to their `NetworkPartyConfig` info (excluding ID),
 /// then reveals it. The protocol verifies consistency and returns a map
 /// of `PartyIndex` to the verified `(ParticipantId, NetworkPartyConfig)`.
-#[tracing::instrument(skip(party, local_config))]
+#[tracing::instrument(skip(party, reveal_msg))]
 pub async fn mpc_config_exchange<M>(
     party: M,
     i: PartyIndex,
     n: u16,
-    local_config: RevealMsg,
+    reveal_msg: RevealMsg,
 ) -> Result<HashMap<PartyIndex, NetworkPartyConfig>>
 where
     M: Mpc<ProtocolMessage = ConfigExchangeMsg>,
@@ -59,7 +58,7 @@ where
     // --- The Protocol ---
 
     // 1. Serialize local config for commitment
-    let local_config_bytes = bincode::serialize(&local_config)?;
+    let local_config_bytes = bincode::serialize(&reveal_msg)?;
 
     // 2. Commit to the config (hash of serialized RevealMsg)
     let commitment = Sha256::digest(&local_config_bytes);
@@ -84,7 +83,7 @@ where
     tracing::debug!("Revealing local config");
     outgoing
         .send(Outgoing::broadcast(ConfigExchangeMsg::Reveal(
-            local_config.clone(),
+            reveal_msg.clone(),
         )))
         .await
         .map_err(|e| CoSnarksError::ExchangeRoundBasedError(e.to_string()))?;
@@ -101,13 +100,13 @@ where
     let mut party_configs = HashMap::with_capacity(n as usize);
 
     // Parse local dns_name into Address struct expected by NetworkPartyConfig
-    let local_address = parse_dns_name(&local_config.dns_name)?;
+    let local_address = parse_dns_name(&reveal_msg.dns_name)?;
 
     // Add self to the map first
     party_configs.insert(i, NetworkPartyConfig {
         id: i as usize,
         dns_name: local_address,
-        cert_path: local_config.cert_path.clone(),
+        cert_path: reveal_msg.cert_path.clone(),
     });
 
     for ((party_idx, commit_msg_id, commit), (_, reveal_msg_id, revealed)) in commitments

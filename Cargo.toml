@@ -19,7 +19,7 @@ cosnarks-zksaas-blueprint-lib = { path = "cosnarks-zksaas-blueprint-lib" }
 
 # blueprint-sdk = { git = "https://github.com/tangle-network/blueprint.git" }
 blueprint-sdk = { path = "../gadget/crates/sdk" }
-round-based = { version = "0.4.1" }
+round-based = { version = "0.4.1", features = ["derive"] }
 sha2 = { version = "*" }
 libp2p = { version = "0.55.0" }
 
