@@ -142,8 +142,19 @@ impl CircuitStore {
             key_result
                 .map_err(|e| Error::StateError(format!("Sled key iteration failed: {}", e)))
                 .and_then(|key_bytes| {
-                    String::from_utf8(key_bytes.to_vec())
-                        .map_err(|e| Error::StateError(format!("Invalid UTF8 key in DB: {}", e)))
+                    // Decode the hex string retrieved from the DB
+                    let hex_key = String::from_utf8(key_bytes.to_vec())
+                        .map_err(|e| Error::StateError(format!("Invalid UTF8 key in DB: {}", e)))?;
+                    let bytes = hex::decode(&hex_key).map_err(|e| {
+                        Error::StateError(format!("Invalid hex key in DB '{}': {}", hex_key, e))
+                    })?;
+                    // Try to convert Vec<u8> to [u8; 32]
+                    bytes.try_into().map_err(|_| {
+                        Error::StateError(format!(
+                            "Invalid key length in DB, expected 32 bytes, found {}",
+                            hex_key.len() / 2 // Approximation for error message
+                        ))
+                    })
                 })
         })
     }

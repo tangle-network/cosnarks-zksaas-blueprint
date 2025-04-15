@@ -13,21 +13,21 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 /// Main context for the zkSaaS Blueprint service
-pub struct CosnarksContext<K: KeyType + 'static>
+pub struct CosnarksContext<K: KeyType>
 where
-    K::Public: Ord,
+    K::Public: Unpin,
 {
     /// The shared Blueprint environment
-    environment: Arc<BlueprintEnvironment>,
+    pub environment: Arc<BlueprintEnvironment>,
     /// Store for circuit metadata and artifact paths
-    circuit_store: CircuitStore,
+    pub circuit_store: CircuitStore,
     /// The MPC network manager for coordinating multi-party computations
-    mpc_network_manager: Arc<MpcNetworkManager<K>>,
+    pub mpc_network_manager: Arc<MpcNetworkManager<K>>,
 }
 
-impl<K: KeyType + 'static> CosnarksContext<K>
+impl<K: KeyType> CosnarksContext<K>
 where
-    K::Public: Ord + std::hash::Hash + Send + Sync,
+    K::Public: Unpin,
 {
     /// Create a new CosnarksContext
     pub async fn new(environment: Arc<BlueprintEnvironment>) -> Result<Self> {

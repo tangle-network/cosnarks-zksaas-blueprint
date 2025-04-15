@@ -13,16 +13,15 @@ use blueprint_sdk::std::{
 use blueprint_sdk::tangle::extract::{CallId, TangleArgs2, TangleResult};
 use blueprint_sdk::{debug, info, warn};
 use hex;
-use std::sync::Arc;
 
 /// Wrapper function that extracts arguments from TangleArgs2 and calls the main implementation
-pub async fn generate_proof_job<K: KeyType + 'static>(
+pub async fn generate_proof_job<K: KeyType>(
     Context(ctx): Context<CosnarksContext<K>>,
     CallId(call_id): CallId,
     TangleArgs2(circuit_id_bytes, witness_input): TangleArgs2<[u8; 32], WitnessInput>,
 ) -> Result<TangleResult<ProofResult>>
 where
-    K::Public: Ord + Hash, // Add Hash bound for session ID generation
+    K::Public: Unpin,
 {
     // Convert CircuitId bytes if needed, depends on how CircuitId is used internally
     // Assuming CircuitId is used directly as [u8; 32] internally now
@@ -42,7 +41,7 @@ where
 }
 
 /// Core implementation of the proof generation logic
-pub async fn generate_proof<K: KeyType + 'static>(
+pub async fn generate_proof<K: KeyType>(
     ctx: CosnarksContext<K>,
     call_id: u64,
     circuit_id: CircuitId, // Use [u8; 32] type directly
@@ -50,7 +49,7 @@ pub async fn generate_proof<K: KeyType + 'static>(
 ) -> Result<ProofResult>
 // Return standard ProofResult
 where
-    K::Public: Ord + Hash, // Add Hash bound for session ID generation
+    K::Public: Unpin,
 {
     let circuit_id_hex = hex::encode(circuit_id);
     info!(%call_id, %circuit_id_hex, "Starting proof generation");

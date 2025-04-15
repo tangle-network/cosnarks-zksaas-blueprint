@@ -29,7 +29,7 @@ const VERIFICATION_KEY_FILENAME: &str = "verification.key";
 
 /// Registers a new ZK circuit, downloads artifacts, generates keys, and stores metadata.
 // #[debug_job] // Cannot use with generics
-pub async fn register_circuit<K: KeyType + 'static>(
+pub async fn register_circuit<K: KeyType>(
     Context(ctx): Context<CosnarksContext<K>>,
     CallId(call_id): CallId,
     TangleArgs4(name, circuit_type, proving_backend, artifact_url_str): TangleArgs4<
@@ -40,7 +40,10 @@ pub async fn register_circuit<K: KeyType + 'static>(
                 // Add OptionalJsonParams here if TangleArgs5 is needed
     >,
     // setup_params: OptionalJsonParams,
-) -> Result<TangleResult<([u8; 32], [u8; 20], Vec<u8>)>> {
+) -> Result<TangleResult<([u8; 32], [u8; 20], Vec<u8>)>>
+where
+    K::Public: Ord + Unpin + std::hash::Hash + Send + Sync,
+{
     // Return standard types
     info!(%call_id, %name, ?circuit_type, ?proving_backend, %artifact_url_str, "Registering circuit");
 

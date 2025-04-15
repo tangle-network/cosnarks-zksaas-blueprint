@@ -15,7 +15,10 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 /// Manages the creation and lifecycle of MPC network sessions using round-based exchange.
-pub struct MpcNetworkManager<K: KeyType> {
+pub struct MpcNetworkManager<K: KeyType + 'static>
+where
+    K::Public: Ord + Unpin,
+{
     // Blueprint network handle for underlying p2p communication
     network_handle: NetworkServiceHandle<K>,
     // Base socket address to bind MPC-Net listeners to (hostname:port)
@@ -30,7 +33,10 @@ pub struct MpcNetworkManager<K: KeyType> {
     established_handlers: Arc<RwLock<HashMap<String, Arc<MpcNetworkHandler>>>>,
 }
 
-impl<K: KeyType> MpcNetworkManager<K> {
+impl<K: KeyType + 'static> MpcNetworkManager<K>
+where
+    K::Public: Ord + Unpin,
+{
     /// Create a new MPC network manager
     pub fn new(
         network_handle: NetworkServiceHandle<K>,
@@ -91,7 +97,7 @@ impl<K: KeyType> MpcNetworkManager<K> {
             ));
         }
 
-        let local_public_key = match self.network_handle.local_verification_key {
+        let local_public_key = match self.network_handle.local_verification_key.clone() {
             Some(key) => key,
             None => {
                 return Err(Error::ConfigError(
@@ -102,7 +108,9 @@ impl<K: KeyType> MpcNetworkManager<K> {
 
         let local_party_index = ordered_participants
             .iter()
-            .position(|pk| VerificationIdentifierKey::InstancePublicKey(*pk) == local_public_key)
+            .position(|pk| {
+                VerificationIdentifierKey::InstancePublicKey(pk.clone()) == local_public_key
+            })
             .ok_or_else(|| {
                 Error::ConfigError("Local node not found in participant list".to_string())
             })? as PartyIndex;
