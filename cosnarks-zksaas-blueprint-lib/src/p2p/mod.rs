@@ -237,10 +237,10 @@ mod tests {
 
         assert_eq!(results.len(), n as usize);
         for i in 0..n {
-            let party_conf = results.get(i as usize).unwrap().clone().unwrap();
+            let party_conf = results[i as usize].as_ref().unwrap().clone();
             let expected_address = parse_dns_name(&configs[i as usize].dns_name).unwrap();
-            assert_eq!(party_conf.get(&i).unwrap().id, i as usize);
-            assert_eq!(party_conf.get(&i).unwrap().dns_name, expected_address);
+            assert_eq!(party_conf[&i].id, i as usize);
+            assert_eq!(party_conf[&i].dns_name, expected_address);
             assert_eq!(
                 party_conf.get(&i).unwrap().cert_path,
                 configs[i as usize].cert_path

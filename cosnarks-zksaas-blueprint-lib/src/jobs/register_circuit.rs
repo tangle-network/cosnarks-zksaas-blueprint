@@ -2,13 +2,22 @@
 
 use crate::context::CosnarksContext;
 use crate::error::{Error, Result};
-use crate::types::{CircuitId, CircuitInfo, CircuitType, ProvingBackend};
+use crate::state::CircuitStore;
+use crate::types::{CircuitId, CircuitInfo, CircuitType, OptionalJsonParams, ProvingBackend};
+// use blueprint_sdk::macros::debug_job; // Macro doesn't support generics yet
 use blueprint_sdk::crypto::KeyType;
 use blueprint_sdk::crypto::hashing::blake3_256;
 use blueprint_sdk::extract::Context;
-use blueprint_sdk::tangle::extract::{CallId, Optional, TangleArgs6, TangleResult};
-use blueprint_sdk::{debug, info};
+use blueprint_sdk::tangle::extract::{CallId, TangleArgs4, TangleResult};
+use reqwest;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use tracing::{debug, error, info};
+use url::Url;
+
+const ARTIFACT_FILENAME: &str = "circuit_artifact"; // Generic name, extension added later
+const PROVING_KEY_FILENAME: &str = "proving.key";
+const VERIFICATION_KEY_FILENAME: &str = "verification.key";
 
 // Example Input Arguments (adjust as needed):
 // - circuit_name: String
@@ -18,133 +27,161 @@ use std::path::PathBuf;
 // - circuit_artifact_url: String (URL to download .r1cs, .acir, etc.)
 // - optional_setup_parameters: JSON (?) for backend-specific setup
 
-pub async fn register_circuit<K: KeyType>(
+/// Registers a new ZK circuit, downloads artifacts, generates keys, and stores metadata.
+// #[debug_job] // Cannot use with generics
+pub async fn register_circuit<K: KeyType + 'static>(
     Context(ctx): Context<CosnarksContext<K>>,
     CallId(call_id): CallId,
-    TangleArgs6(
-        name,
-        description,
-        circuit_type_str,
-        backend_str,
-        artifact_url,
-        setup_params_json,
-    ): TangleArgs6<
-        String,           // name
-        Optional<String>, // description
-        String,           // circuit_type (e.g., "circom", "noir")
-        String,           // proving_backend (e.g., "groth16", "plonk")
-        String,           // artifact_url (URL to download R1CS/ACIR etc.)
-        Optional<String>, // setup_params_json (Optional JSON for setup)
+    TangleArgs4(name, circuit_type, proving_backend, artifact_url_str): TangleArgs4<
+        String,
+        CircuitType,
+        ProvingBackend,
+        String, // artifact_url
+                // Add OptionalJsonParams here if TangleArgs5 is needed
     >,
-) -> Result<TangleResult<CircuitId>> {
-    info!(name, %artifact_url, "Registering new circuit");
+    // setup_params: OptionalJsonParams,
+) -> Result<TangleResult<([u8; 32], [u8; 20], Vec<u8>)>> {
+    // Return standard types
+    info!(%call_id, %name, ?circuit_type, ?proving_backend, %artifact_url_str, "Registering circuit");
 
-    // 1. Parse and Validate Inputs
-    let circuit_type = match circuit_type_str.to_lowercase().as_str() {
-        "circom" => CircuitType::Circom,
-        "noir" => CircuitType::Noir,
-        _ => {
-            return Err(Error::InvalidInput(format!(
-                "Invalid circuit type: {}",
-                circuit_type_str
-            )));
-        }
-    };
+    // --- Validation ---
+    validate_backend_compatibility(&circuit_type, &proving_backend)?;
 
-    let proving_backend = match backend_str.to_lowercase().as_str() {
-        "groth16" => ProvingBackend::Groth16,
-        "plonk" => ProvingBackend::Plonk,
-        "ultrahonk" => ProvingBackend::UltraHonk,
-        _ => {
-            return Err(Error::InvalidInput(format!(
-                "Invalid proving backend: {}",
-                backend_str
-            )));
-        }
-    };
+    // --- Circuit ID Generation ---
+    let circuit_id = generate_circuit_id(&name, &circuit_type, &proving_backend);
+    let circuit_id_hex = hex::encode(circuit_id);
+    info!(%circuit_id_hex, "Generated circuit ID");
 
-    // Validate compatibility
-    match (&circuit_type, &proving_backend) {
-        (CircuitType::Circom, ProvingBackend::Groth16) => { /* ok */ }
-        (CircuitType::Circom, ProvingBackend::Plonk) => { /* ok */ }
-        (CircuitType::Noir, ProvingBackend::UltraHonk) => { /* ok */ }
-        _ => {
-            return Err(Error::IncompatibleBackend(format!(
-                "Backend {:?} not compatible with circuit type {:?}",
-                proving_backend, circuit_type
-            )));
-        }
-    }
-
-    // TODO: Parse setup_params_json if needed for key generation
-    let _setup_params: Option<serde_json::Value> = match setup_params_json.0 {
-        Some(json_str) => Some(serde_json::from_str(&json_str).map_err(Error::SerdeJsonError)?),
-        None => None,
-    };
-
-    // 2. Download Circuit Artifact
-    // In a real scenario, use a proper HTTP client (reqwest, hyper)
-    // Handle errors, timeouts, size limits etc.
-    debug!(%artifact_url, "Downloading artifact...");
-    // Placeholder: Simulate download
-    // let artifact_data = download_artifact(&artifact_url).await?;
-    let artifact_data = format!("artifact_for_{}", name).into_bytes(); // Placeholder data
-    debug!("Artifact downloaded ({} bytes)", artifact_data.len());
-
-    // Generate a unique ID for the circuit (e.g., hash of name+artifact+timestamp)
-    let id_payload = format!(
-        "{}:{}:{:?}:{:?}:{}",
-        name,
-        artifact_url,
-        circuit_type,
-        proving_backend,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
+    // --- Artifact Download ---
+    let artifact_url = Url::parse(&artifact_url_str).map_err(Error::UrlParseError)?;
+    debug!(url = %artifact_url, "Downloading artifact...");
+    let artifact_data = download_artifact(&artifact_url).await?;
+    debug!(
+        "Artifact downloaded successfully ({} bytes)",
+        artifact_data.len()
     );
-    let circuit_id_hash = blake3_256(id_payload.as_bytes());
-    let circuit_id = hex::encode(circuit_id_hash);
 
-    // 3. [CRITICAL] Trigger Key Generation
-    debug!(%circuit_id, "Starting key generation...");
-    // This part is highly dependent on the coSNARK library specifics and backend.
-    // It might involve calling external processes or complex Rust functions.
-    // It could also be an MPC process.
+    // --- Key Generation (Placeholder) ---
+    // In a real implementation, this would call co-circom/co-noir based on type/backend
+    // to generate PK and VK from the downloaded artifact_data.
+    info!(%circuit_id_hex, "Generating proving and verification keys (Placeholder)...", );
+    let (proving_key_data, verification_key_data, verifier_address) =
+        generate_keys_placeholder(&circuit_type, &proving_backend, &artifact_data)?;
+    debug!(
+        "Keys generated (PK: {} bytes, VK: {} bytes)",
+        proving_key_data.len(),
+        verification_key_data.len()
+    );
 
-    // --- Placeholder Key Generation Logic ---
-    // let (pk_data, vk_data) = generate_keys(&circuit_type, &proving_backend, &artifact_data, _setup_params)?;
-    let pk_data = format!("pk_for_{}", circuit_id).into_bytes();
-    let vk_data = format!("vk_for_{}", circuit_id).into_bytes();
-    debug!(%circuit_id, "Key generation complete.");
-    // --- End Placeholder ---
+    // --- Artifact Storage ---
+    let artifact_store = ctx.circuit_store();
+    let artifacts_base_path = artifact_store.get_artifacts_base_path();
+    let circuit_artifact_dir = artifacts_base_path.join(&circuit_id_hex);
 
-    // 4. Create CircuitInfo
-    let circuit_artifact_dir_rel = PathBuf::from(&circuit_id); // Relative path within artifacts store
-    let artifact_filename = format!("circuit.artifact"); // Or derive from URL/type
-    let pk_filename = format!("proving.key");
-    let vk_filename = format!("verification.key");
+    // Determine artifact file extension based on type
+    let artifact_ext = match circuit_type {
+        CircuitType::Circom => "r1cs", // Or .json, depends on compilation output
+        CircuitType::Noir => "acir",
+    };
+    let artifact_filename = format!("{}.{}", ARTIFACT_FILENAME, artifact_ext);
 
-    let info = CircuitInfo {
-        id: circuit_id.clone(),
-        name,
-        description: description.0,
+    // Define relative paths for storing in CircuitInfo
+    let artifact_rel_path = PathBuf::from(&artifact_filename);
+    let pk_rel_path = PathBuf::from(PROVING_KEY_FILENAME);
+    let vk_rel_path = PathBuf::from(VERIFICATION_KEY_FILENAME);
+
+    let circuit_info = CircuitInfo {
+        id: circuit_id,
+        name: name.clone(),
         circuit_type,
         proving_backend,
-        // Store paths relative to the circuit's artifact directory
-        artifact_path: circuit_artifact_dir_rel.join(artifact_filename),
-        proving_key_path: circuit_artifact_dir_rel.join(pk_filename),
-        verification_key_path: circuit_artifact_dir_rel.join(vk_filename),
+        artifact_path: artifact_rel_path.clone(), // Store relative path
+        proving_key_path: pk_rel_path.clone(),    // Store relative path
+        verification_key_path: vk_rel_path.clone(), // Store relative path
+        verifier_address,                         // Store optional verifier address
     };
 
-    // 5. Store everything
-    debug!(%circuit_id, "Storing circuit data...");
-    ctx.circuit_store()
-        .store_circuit(&info, &artifact_data, &pk_data, &vk_data)?;
-    info!(%circuit_id, name = %info.name, "Circuit registered successfully.");
+    // Store artifacts and info
+    debug!(dir = ?circuit_artifact_dir, "Storing artifacts...");
+    artifact_store.store_circuit_artifacts(
+        &circuit_id_hex,
+        &artifact_filename,
+        &artifact_data,
+        PROVING_KEY_FILENAME,
+        &proving_key_data,
+        VERIFICATION_KEY_FILENAME,
+        &verification_key_data,
+    )?;
+    artifact_store.store_circuit_info(&circuit_id_hex, &circuit_info)?;
+    info!(%circuit_id_hex, "Circuit artifacts and info stored successfully.");
 
-    // 6. Return Circuit ID
-    Ok(TangleResult(circuit_id))
+    // --- Prepare Result for Solidity ---
+    let result_verifier_addr_bytes = verifier_address.unwrap_or_default(); // Use default if None
+
+    Ok(TangleResult((
+        circuit_id,
+        result_verifier_addr_bytes,
+        verification_key_data,
+    )))
+}
+
+/// Validates if the chosen proving backend is compatible with the circuit type.
+fn validate_backend_compatibility(
+    circuit_type: &CircuitType,
+    proving_backend: &ProvingBackend,
+) -> Result<()> {
+    match (circuit_type, proving_backend) {
+        (CircuitType::Circom, ProvingBackend::Groth16) => Ok(()),
+        (CircuitType::Circom, ProvingBackend::Plonk) => Ok(()),
+        (CircuitType::Noir, ProvingBackend::UltraHonk) => Ok(()),
+        _ => Err(Error::IncompatibleBackend(format!(
+            "Proving backend {:?} is not compatible with circuit type {:?}",
+            proving_backend, circuit_type
+        ))),
+    }
+}
+
+/// Generates a unique CircuitId based on metadata.
+fn generate_circuit_id(
+    name: &str,
+    circuit_type: &CircuitType,
+    proving_backend: &ProvingBackend,
+) -> CircuitId {
+    let mut hasher = Sha256::new();
+    hasher.update(name.as_bytes());
+    hasher.update(format!("{:?}", circuit_type).as_bytes());
+    hasher.update(format!("{:?}", proving_backend).as_bytes());
+    hasher.finalize().into()
+}
+
+/// Downloads artifact data from a given URL.
+async fn download_artifact(url: &Url) -> Result<Vec<u8>> {
+    let response = reqwest::get(url.clone()).await?;
+    if !response.status().is_success() {
+        return Err(Error::NetworkError(format!(
+            "Failed to download artifact from {}: Status {}",
+            url,
+            response.status()
+        )));
+    }
+    let bytes = response.bytes().await?.to_vec();
+    Ok(bytes)
+}
+
+/// Placeholder function for generating keys.
+/// TODO: Replace with actual calls to co-circom/co-noir setup functions.
+fn generate_keys_placeholder(
+    _circuit_type: &CircuitType,
+    _proving_backend: &ProvingBackend,
+    _artifact_data: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, Option<[u8; 20]>)> {
+    // Simulate key generation
+    info!("Simulating key generation...");
+    let proving_key_data = b"fake_proving_key_data".to_vec();
+    let verification_key_data = b"fake_verification_key_data".to_vec();
+    // Optionally simulate generating/finding a verifier contract address
+    let verifier_address = Some([0u8; 20]);
+    Ok((proving_key_data, verification_key_data, verifier_address))
 }
 
 // Placeholder/Helper function signatures (implementations needed)

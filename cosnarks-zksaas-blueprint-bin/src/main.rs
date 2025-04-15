@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     let consumer = TangleConsumer::new(client.rpc_client.clone(), signer);
 
     // Initialize the custom context
-    let context = CosnarksContext::new(env.clone(), base_bind_addr).await?;
+    let context = CosnarksContext::new(env.clone()).await?;
 
     // Configure the router, mapping job IDs to handlers
     let router = Router::new()

@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::network::MpcNetworkManager;
 use crate::state::CircuitStore;
 use blueprint_sdk::clients::GadgetServicesClient;
@@ -10,78 +10,118 @@ use blueprint_sdk::runner::config::BlueprintEnvironment;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tokio::sync::RwLock;
 
-#[derive(Clone, KeystoreContext, ServicesContext, TangleClientContext)]
-pub struct CosnarksContext<K: KeyType> {
+/// Main context for the zkSaaS Blueprint service
+pub struct CosnarksContext<K: KeyType + 'static>
+where
+    K::Public: Ord,
+{
     /// The shared Blueprint environment
-    #[config]
-    env: BlueprintEnvironment,
-    /// Store for circuit metadata
+    environment: Arc<BlueprintEnvironment>,
+    /// Store for circuit metadata and artifact paths
     circuit_store: CircuitStore,
     /// The MPC network manager for coordinating multi-party computations
-    mpc_network_manager: Arc<Mutex<MpcNetworkManager<K>>>,
+    mpc_network_manager: Arc<MpcNetworkManager<K>>,
 }
 
-impl<K: KeyType> CosnarksContext<K> {
+impl<K: KeyType + 'static> CosnarksContext<K>
+where
+    K::Public: Ord + std::hash::Hash + Send + Sync,
+{
     /// Create a new CosnarksContext
-    pub async fn new(
-        env: BlueprintEnvironment,
-        network_handle: NetworkServiceHandle<K>,
-    ) -> Result<Self> {
+    pub async fn new(environment: Arc<BlueprintEnvironment>) -> Result<Self> {
+        let data_dir = environment.data_dir.as_ref().ok_or_else(|| {
+            Error::MissingConfiguration(
+                "Data directory (data_dir) must be set in Blueprint environment".to_string(),
+            )
+        })?;
+
         // Create circuit store
-        let base_path = env.data_dir.clone().unwrap_or_else(|| PathBuf::from("."));
-        let circuit_store = CircuitStore::new(base_path.clone())?;
+        let circuit_store = CircuitStore::new(data_dir.clone())?;
 
-        // Set up network manager with default values
-        // Use a base port of 9000 for MPC-Net
-        let base_bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 9000);
+        // -- Networking Setup --
+        // Define a unique protocol name for this service
+        let protocol_name = "/cosnarks-zksaas/mpc/1.0.0"; // Example protocol ID
+        let network_config = environment
+            .libp2p_network_config(protocol_name, false)
+            .map_err(Into::<blueprint_sdk::Error>::into)?;
 
-        // Ensure certificates directory exists
-        let cert_dir = base_path.join("mpc_certs");
-        std::fs::create_dir_all(&cert_dir)?;
+        // TODO: Fetch allowed keys dynamically if needed, e.g., from Tangle
+        // For now, assume AllowAll or configuration via environment
+        let allowed_keys = blueprint_sdk::networking::AllowedKeys::default();
+        let (allowed_keys_tx, allowed_keys_rx) = crossbeam_channel::unbounded(); // Required by libp2p_start_network
 
-        // Paths to key and cert
-        let key_path = cert_dir.join("mpc_key.der");
-        let cert_path = cert_dir.join("mpc_cert.der");
+        let network_handle = environment
+            .libp2p_start_network(network_config, allowed_keys, allowed_keys_rx)
+            .map_err(Into::<blueprint_sdk::Error>::into)?;
 
-        // Create the MPC network manager
-        let mpc_network_manager = MpcNetworkManager::new(
-            network_handle,
-            base_bind_addr.to_string(),
-            key_path,
-            cert_path,
+        // -- MPC Network Manager Setup --
+        // These should ideally come from secure configuration
+        let mpc_listen_dns: SocketAddr = std::env::var("MPC_LISTEN_DNS")
+            .map_err(|_| {
+                Error::MissingConfiguration(
+                    "MPC_LISTEN_DNS environment variable not set".to_string(),
+                )
+            })?
+            .parse()
+            .map_err(|_| Error::InvalidInput("Invalid MPC_LISTEN_DNS format".to_string()))?;
+        let key_path = data_dir.join(
+            std::env::var("MPC_KEY_PATH").unwrap_or_else(|_| "mpc_certs/mpc_key.der".to_string()),
+        );
+        let cert_path = data_dir.join(
+            std::env::var("MPC_CERT_PATH").unwrap_or_else(|_| "mpc_certs/mpc_cert.der".to_string()),
         );
 
+        // Ensure certificates directory exists
+        if let Some(parent) = key_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if let Some(parent) = cert_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // TODO: Add check if key/cert files actually exist?
+
+        let mpc_network_manager = Arc::new(MpcNetworkManager::new(
+            network_handle,
+            mpc_listen_dns,
+            key_path,
+            cert_path,
+        ));
+
         Ok(Self {
-            env,
+            environment,
             circuit_store,
-            mpc_network_manager: Arc::new(Mutex::new(mpc_network_manager)),
+            mpc_network_manager,
         })
     }
 
-    /// Access the data directory
-    pub fn data_dir(&self) -> Option<PathBuf> {
-        self.env.data_dir.clone()
-    }
-
-    /// Get the circuit store
+    /// Provides immutable access to the CircuitStore.
     pub fn circuit_store(&self) -> &CircuitStore {
         &self.circuit_store
     }
 
-    /// Get the MPC network manager
-    pub fn mpc_network_manager(&self) -> &Arc<Mutex<MpcNetworkManager<K>>> {
+    /// Provides immutable access to the MpcNetworkManager.
+    pub fn mpc_network_manager(&self) -> &Arc<MpcNetworkManager<K>> {
         &self.mpc_network_manager
     }
 
-    /// Get allowed operators for a circuit
+    /// Provides access to the configured data directory.
+    pub fn data_dir(&self) -> Option<PathBuf> {
+        self.environment.data_dir.clone()
+    }
+
+    /// Retrieves the list of registered operator public keys for the service.
+    /// TODO: Implement actual fetching from Tangle state.
     pub async fn get_operators(&self) -> Result<Vec<K::Public>> {
         let operators = self
-            .env
+            .environment
             .tangle_client()
-            .await?
+            .await
+            .map_err(Into::<blueprint_sdk::Error>::into)?
             .get_operators()
-            .await?
+            .await
+            .map_err(Into::<blueprint_sdk::Error>::into)?
             .values()
             .map(|k| K::Public::from_bytes(&k.0).unwrap())
             .collect();

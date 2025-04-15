@@ -5,53 +5,66 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 // Represents the type of circuit (Circom or Noir)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CircuitType {
+    #[serde(rename = "circom")]
     Circom,
+    #[serde(rename = "noir")]
     Noir,
 }
 
-// Represents the ZK proving backend (Groth16, Plonk, UltraHonk)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Represents the ZK proving backend
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProvingBackend {
-    Groth16,   // Compatible with Circom
-    Plonk,     // Compatible with Circom
-    UltraHonk, // Compatible with Noir
+    #[serde(rename = "groth16")]
+    Groth16,
+    #[serde(rename = "plonk")]
+    Plonk,
+    #[serde(rename = "ultrahonk")]
+    UltraHonk,
 }
 
-// Identifier for a registered circuit
-pub type CircuitId = String;
+// Identifier for a registered circuit (hash of metadata)
+// Represented as bytes32 on the Solidity side.
+pub type CircuitId = [u8; 32];
 
 // Information stored about a registered circuit
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitInfo {
     pub id: CircuitId,
     pub name: String,
-    pub description: Option<String>,
     pub circuit_type: CircuitType,
     pub proving_backend: ProvingBackend,
     // Path to the compiled circuit artifact (e.g., R1CS, ACIR bytecode)
+    // Stored relative to the artifacts base directory
     pub artifact_path: PathBuf,
     // Path to the generated proving key (specific to the backend)
     pub proving_key_path: PathBuf,
-    // Path to the verification key (useful for on-chain verification)
+    // Path to the verification key
     pub verification_key_path: PathBuf,
-}
-
-// Input data for generating a proof for a specific circuit
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofRequestInput {
-    // Could be JSON, a file path, or raw bytes depending on circuit input format
-    pub witness_data: serde_json::Value, // Example: JSON for witness values
-                                         // Potentially public inputs separated if needed by the contract
-                                         // pub public_inputs: Vec<String>,
+    // Optional address of the verifier contract (bytes20)
+    pub verifier_address: Option<[u8; 20]>,
 }
 
 // The generated proof and public inputs
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProofResult {
     pub proof_bytes: Vec<u8>,
-    pub public_inputs: Vec<String>, // Or a more structured type
+    // Public inputs, each as a byte vector, matching Solidity's bytes[]
+    pub public_inputs: Vec<Vec<u8>>,
+}
+
+// --- Helper for Job Arguments ---
+
+/// Used for optional setup parameters in register_circuit
+pub type OptionalJsonParams = Option<serde_json::Value>;
+
+/// Used for witness data input in generate_proof
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)] // Allows accepting either a direct JSON string or a URI
+pub enum WitnessInput {
+    Json(String),
+    Uri(String), // Assume URI points to a JSON file
 }
 
 // Job ID constants (defined in lib.rs and jobs/mod.rs, but good to reference)
