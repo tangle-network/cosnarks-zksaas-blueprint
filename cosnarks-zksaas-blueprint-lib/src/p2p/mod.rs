@@ -270,7 +270,7 @@ mod tests {
             let node = TestNode::<SpEcdsa>::new(
                 network_name,
                 instance_id,
-                AllowedKeys::default(),
+                AllowedKeys::InstancePublicKeys(Default::default()),
                 vec![],
                 false,
             );

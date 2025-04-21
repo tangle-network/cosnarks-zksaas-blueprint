@@ -1,20 +1,24 @@
-use blueprint_sdk::env::BlueprintEnvironment;
-use blueprint_sdk::logger;
+use blueprint_sdk::Job;
+use blueprint_sdk::Router;
+use blueprint_sdk::contexts::tangle::TangleClientContext;
+use blueprint_sdk::crypto::sp_core::{SpEcdsa, SpSr25519};
+use blueprint_sdk::crypto::tangle_pair_signer::TanglePairSigner;
+use blueprint_sdk::keystore::backends::Backend;
 use blueprint_sdk::runner::BlueprintRunner;
-use blueprint_sdk::tangle::config::TangleConfig;
-use blueprint_sdk::tangle::context::TangleLayer;
-use blueprint_sdk::tangle::crypto::TanglePairSigner;
-use blueprint_sdk::tangle::net::{TangleConsumer, TangleProducer};
-use blueprint_sdk::tangle::router::Router;
+use blueprint_sdk::runner::config::BlueprintEnvironment;
+use blueprint_sdk::runner::tangle::config::TangleConfig;
+use blueprint_sdk::tangle::consumer::TangleConsumer;
+use blueprint_sdk::tangle::layers::TangleLayer;
+use blueprint_sdk::tangle::producer::TangleProducer;
+use color_eyre::eyre;
 use color_eyre::{Result, eyre::Context};
 use cosnarks_zksaas_blueprint_lib::context::CosnarksContext;
 use cosnarks_zksaas_blueprint_lib::jobs::{
-    GENERATE_PROOF_JOB_ID, REGISTER_CIRCUIT_JOB_ID, generate_proof, register_circuit,
+    GENERATE_PROOF_JOB_ID, REGISTER_CIRCUIT_JOB_ID, generate_proof_job, register_circuit,
 };
-use rcgen::CertifiedKey;
-use sp_core::sr25519::Pair;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use tracing::level_filters::LevelFilter;
 
 // Define default paths relative to the config/data directory
 const MPC_CERT_FILENAME: &str = "mpc_cert.der";
@@ -25,7 +29,7 @@ const DEFAULT_MPC_BASE_PORT: u16 = 10000;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging and error handling
-    logger::init(Default::default())?;
+    setup_log();
     color_eyre::install()?; // Optional: Better panic messages
 
     // Load environment variables (Tangle RPC, keystore path, data dir, etc.)
@@ -34,35 +38,25 @@ async fn main() -> Result<()> {
     // Initialize the signing key from the keystore
     let signer_key = env
         .keystore()
-        .first_local::<Pair>() // Use sr25519::Pair
+        .first_local::<SpSr25519>() // Use sr25519::Pair
         .map_err(|e| eyre::eyre!("Failed to get local signer key: {}", e))?;
     let secret_pair = env
         .keystore()
-        .get_secret::<Pair>(&signer_key)
+        .get_secret::<SpSr25519>(&signer_key)
         .map_err(|e| eyre::eyre!("Failed to get secret for signer key: {}", e))?;
     let signer = TanglePairSigner::new(secret_pair.0);
 
     // Determine MPC Net paths and generate cert/key if needed
     let mpc_net_dir = env
-        .config_dir()
+        .data_dir
+        .clone()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("mpc_net");
     std::fs::create_dir_all(&mpc_net_dir).context("Creating mpc_net directory")?;
     let cert_path = mpc_net_dir.join(MPC_CERT_FILENAME);
     let key_path = mpc_net_dir.join(MPC_KEY_FILENAME);
-    let base_bind_addr_str = env
-        .protocol_settings
-        .experimental
-        .get("mpc_base_bind_addr") // Example: Get base bind addr from experimental config
-        .map(|v| v.as_str().unwrap_or("0.0.0.0"))
-        .unwrap_or("0.0.0.0");
-    let base_port = env
-        .protocol_settings
-        .experimental
-        .get("mpc_base_port")
-        .and_then(|v| v.as_integer()) // Expecting integer port
-        .map(|p| p as u16)
-        .unwrap_or(DEFAULT_MPC_BASE_PORT);
+    let base_bind_addr_str = "0.0.0.0";
+    let base_port = DEFAULT_MPC_BASE_PORT;
 
     let base_bind_addr: SocketAddr = format!("{}:{}", base_bind_addr_str, base_port)
         .parse()
@@ -79,13 +73,13 @@ async fn main() -> Result<()> {
     let consumer = TangleConsumer::new(client.rpc_client.clone(), signer);
 
     // Initialize the custom context
-    let context = CosnarksContext::new(env.clone()).await?;
+    let context = CosnarksContext::<SpEcdsa>::new(env.clone().into()).await?;
 
     // Configure the router, mapping job IDs to handlers
     let router = Router::new()
         // Apply TangleLayer to enforce standard Tangle job context requirements
         .route(REGISTER_CIRCUIT_JOB_ID, register_circuit.layer(TangleLayer))
-        .route(GENERATE_PROOF_JOB_ID, generate_proof.layer(TangleLayer))
+        .route(GENERATE_PROOF_JOB_ID, generate_proof_job.layer(TangleLayer))
         .with_context(context); // Pass the shared context to all routes
 
     // Build and run the Blueprint
@@ -107,14 +101,28 @@ fn generate_mpc_cert(cert_path: &Path, key_path: &Path) -> Result<()> {
     // Use common names relevant to the service, or just localhost for simple cases
     // SANS are important for TLS verification
     let sans = vec!["localhost".to_string()];
-    let CertifiedKey { cert, key_pair } =
-        rcgen::generate_simple_self_signed(sans).context("generating self-signed cert")?;
-    let key = key_pair.serialize_der();
+    let cert = rcgen::generate_simple_self_signed(sans).context("generating self-signed cert")?;
+    let key = cert.get_key_pair().serialize_der();
     std::fs::write(key_path, key).context("writing key file")?;
-    let cert_pem = cert.pem(); // Save PEM for easier inspection if needed
+    let cert_pem = cert.serialize_pem()?; // Save PEM for easier inspection if needed
     std::fs::write(cert_path.with_extension("pem"), cert_pem).context("writing cert PEM file")?;
-    let cert_der = cert.der(); // Save DER as expected by mpc-net
+    let cert_der = cert.serialize_der()?; // Save DER as expected by mpc-net
     std::fs::write(cert_path, cert_der).context("writing certificate DER file")?;
     tracing::info!("MPC certificate and key generated successfully.");
     Ok(())
+}
+
+pub fn setup_log() {
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let _ = tracing_subscriber::fmt::SubscriberBuilder::default()
+        .without_time()
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .finish()
+        .try_init();
 }

@@ -21,6 +21,8 @@ where
 {
     // Blueprint network handle for underlying p2p communication
     network_handle: NetworkServiceHandle<K>,
+    // Local verification key for the current node
+    local_verification_key: VerificationIdentifierKey<K>,
     // Base socket address to bind MPC-Net listeners to (hostname:port)
     // Use a publicly reachable address/DNS name in production
     mpc_listen_dns: SocketAddr,
@@ -40,12 +42,14 @@ where
     /// Create a new MPC network manager
     pub fn new(
         network_handle: NetworkServiceHandle<K>,
+        local_verification_key: VerificationIdentifierKey<K>,
         mpc_listen_dns: SocketAddr,
         key_path: PathBuf,
         cert_path: PathBuf,
     ) -> Self {
         Self {
             network_handle,
+            local_verification_key,
             mpc_listen_dns,
             key_path,
             cert_path,
@@ -97,14 +101,7 @@ where
             ));
         }
 
-        let local_public_key = match self.network_handle.local_verification_key.clone() {
-            Some(key) => key,
-            None => {
-                return Err(Error::ConfigError(
-                    "Local node not found in participant list".to_string(),
-                ));
-            }
-        };
+        let local_public_key = self.local_verification_key.clone();
 
         let local_party_index = ordered_participants
             .iter()

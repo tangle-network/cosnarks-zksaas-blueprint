@@ -15,5 +15,5 @@ pub mod generate_proof;
 pub mod register_circuit;
 
 // Re-export handlers
-pub use generate_proof::generate_proof;
+pub use generate_proof::generate_proof_job;
 pub use register_circuit::register_circuit;

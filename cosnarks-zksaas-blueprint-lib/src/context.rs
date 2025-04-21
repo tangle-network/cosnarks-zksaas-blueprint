@@ -5,6 +5,7 @@ use blueprint_sdk::clients::GadgetServicesClient;
 use blueprint_sdk::contexts::tangle::TangleClientContext;
 use blueprint_sdk::crypto::{BytesEncoding, KeyType};
 use blueprint_sdk::macros::context::{KeystoreContext, ServicesContext, TangleClientContext};
+use blueprint_sdk::networking::discovery::peers::VerificationIdentifierKey;
 use blueprint_sdk::networking::service_handle::NetworkServiceHandle;
 use blueprint_sdk::runner::config::BlueprintEnvironment;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -13,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 /// Main context for the zkSaaS Blueprint service
+#[derive(Clone)]
 pub struct CosnarksContext<K: KeyType>
 where
     K::Public: Unpin,
@@ -46,10 +48,11 @@ where
         let network_config = environment
             .libp2p_network_config(protocol_name, false)
             .map_err(Into::<blueprint_sdk::Error>::into)?;
-
+        let local_verification_key = K::public_from_secret(&network_config.instance_key_pair);
         // TODO: Fetch allowed keys dynamically if needed, e.g., from Tangle
         // For now, assume AllowAll or configuration via environment
-        let allowed_keys = blueprint_sdk::networking::AllowedKeys::default();
+        let allowed_keys =
+            blueprint_sdk::networking::AllowedKeys::InstancePublicKeys(Default::default());
         let (allowed_keys_tx, allowed_keys_rx) = crossbeam_channel::unbounded(); // Required by libp2p_start_network
 
         let network_handle = environment
@@ -84,6 +87,7 @@ where
 
         let mpc_network_manager = Arc::new(MpcNetworkManager::new(
             network_handle,
+            VerificationIdentifierKey::InstancePublicKey(local_verification_key),
             mpc_listen_dns,
             key_path,
             cert_path,
